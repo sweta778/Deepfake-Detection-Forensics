@@ -12,7 +12,7 @@ An end-to-end computer vision and deep learning system for detecting facial mani
 
 Install dependencies:
 ```bash
-pip install tensorflow opencv-python dlib mtcnn scikit-learn matplotlib seaborn numpy pandas
+pip install tensorflow opencv-python dlib-bin mtcnn scikit-learn matplotlib seaborn numpy pandas streamlit
 ```
 
 ---
@@ -81,7 +81,26 @@ DATASET_PATH = r"C:\your\path\to\FF_Dataset"
 
 ## How to Run
 
-### Option 1 - Full Pipeline (Notebook)
+### Option 1 - Streamlit Web Dashboard (Recommended)
+Launch the interactive browser dashboard:
+```bash
+python -m streamlit run app.py
+```
+* Navigate to `http://localhost:8501`
+* Upload any `.mp4`, `.avi`, or `.mov` video or select a built-in sample.
+* Adjust sampling frame counts, decision thresholds, and view real-time Grad-CAM explainability heatmaps.
+
+### Option 2 - CLI Demo Script
+Run fast inference on any video via terminal:
+```bash
+python demo.py
+```
+Or specify a video path:
+```bash
+python demo.py "path/to/video.mp4"
+```
+
+### Option 3 - Full Pipeline (Notebook)
 Run all cells in `deepfake_detection.ipynb` from top to bottom. The notebook includes:
 - Face extraction and alignment using MTCNN
 - FFT + SVM baseline model
@@ -96,15 +115,6 @@ Run all cells in `deepfake_detection.ipynb` from top to bottom. The notebook inc
 - Cross-dataset validation on Celeb-DF v2
 - Grad-CAM on Celeb-DF failed cases
 - Real-time Grad-CAM video overlay
-
-> **Smart Skip Logic:** Training cells automatically skip if a saved model already exists. To retrain, delete the corresponding file.
-
-### Option 2 - Demo Script
-After models are in place, run the demo on any video:
-```bash
-python demo.py
-```
-The demo uses the Equal Weighted Ensemble (0.5/0.5) to classify a video as **REAL** or **FAKE** with a confidence score.
 
 ---
 
