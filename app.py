@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling for polished dark/light forensic theme
+# Custom Styling
 st.markdown("""
 <style>
     .main-header {
@@ -49,18 +49,11 @@ st.markdown("""
         text-align: center;
         margin-bottom: 20px;
     }
-    .card-metric {
-        background-color: rgba(255, 255, 255, 0.05);
+    .source-box {
+        background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 10px;
         padding: 15px;
-        text-align: center;
-    }
-    .frame-card {
-        background-color: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 10px;
-        padding: 12px;
         margin-bottom: 15px;
     }
 </style>
@@ -81,16 +74,38 @@ def load_detection_resources():
     
     eff_model = None
     xcep_model = None
+    grad_model = None
     
     if os.path.exists(eff_path):
         eff_model = tf.keras.models.load_model(eff_path)
+        try:
+            # multiply_3 is the spatial attention feature map in efficientnet_model
+            layer = eff_model.get_layer("multiply_3")
+            grad_model = tf.keras.models.Model(
+                inputs=eff_model.input,
+                outputs=[layer.output, eff_model.output]
+            )
+        except Exception:
+            pass
+            
     if os.path.exists(xcep_path):
         xcep_model = tf.keras.models.load_model(xcep_path)
-        
+        if grad_model is None:
+            try:
+                for l in reversed(xcep_model.layers):
+                    if isinstance(l, tf.keras.layers.Conv2D):
+                        grad_model = tf.keras.models.Model(
+                            inputs=xcep_model.input,
+                            outputs=[l.output, xcep_model.output]
+                        )
+                        break
+            except Exception:
+                pass
+                
     detector = MTCNN()
-    return eff_model, xcep_model, detector
+    return eff_model, xcep_model, grad_model, detector
 
-eff_model, xcep_model, detector = load_detection_resources()
+eff_model, xcep_model, grad_model, detector = load_detection_resources()
 
 # ---------------------------------------------------------
 # Forensic Helper Functions
@@ -105,34 +120,20 @@ def apply_elliptical_mask(image):
     masked = cv2.bitwise_and(image, image, mask=mask)
     return masked
 
-def generate_gradcam_heatmap(model, face_normalized):
+def generate_gradcam_heatmap(grad_model, face_normalized):
     """Generates Grad-CAM activation heatmap for face input."""
+    if grad_model is None:
+        return None
     try:
-        # Check if model has sublayer efficientnetb0
-        if "efficientnetb0" in [l.name for l in model.layers]:
-            base = model.get_layer("efficientnetb0")
-            grad_model = tf.keras.models.Model(
-                inputs=model.inputs,
-                outputs=[base.get_layer("top_conv").output, model.output]
-            )
-        else:
-            last_conv = None
-            for layer in reversed(model.layers):
-                if isinstance(layer, tf.keras.layers.Conv2D):
-                    last_conv = layer.name
-                    break
-            if last_conv is None:
-                return None
-            grad_model = tf.keras.models.Model(
-                inputs=model.inputs,
-                outputs=[model.get_layer(last_conv).output, model.output]
-            )
-            
+        inp = np.expand_dims(face_normalized, axis=0)
         with tf.GradientTape() as tape:
-            conv_outputs, predictions = grad_model(np.expand_dims(face_normalized, axis=0))
+            conv_outputs, predictions = grad_model(inp)
             loss = predictions[:, 0]
             
         grads = tape.gradient(loss, conv_outputs)
+        if grads is None:
+            return None
+            
         pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
         conv_outputs = conv_outputs[0]
         heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
@@ -165,17 +166,16 @@ def analyze_video_frames(video_path, num_frames=10, threshold=0.50, enable_gradc
         cap.release()
         return None
         
-    frame_indices = np.linspace(0, total_frames - 1, min(num_frames, total_frames), dtype=int)
+    num_to_sample = min(num_frames, total_frames)
+    frame_indices = np.linspace(0, total_frames - 1, num_to_sample, dtype=int)
     results = []
-    
-    active_model = eff_model if eff_model is not None else xcep_model
     
     for i, idx in enumerate(frame_indices):
         if progress_bar:
             progress_bar.progress((i + 1) / len(frame_indices))
         if status_text:
             timestamp = idx / fps if fps > 0 else 0
-            status_text.text(f"Analyzing frame {i+1}/{len(frame_indices)} (Time: {timestamp:.2f}s)...")
+            status_text.text(f"Analyzing frame {i+1}/{len(frame_indices)} (Timestamp: {timestamp:.2f}s)...")
             
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
@@ -210,10 +210,10 @@ def analyze_video_frames(video_path, num_frames=10, threshold=0.50, enable_gradc
         else:
             prob = float(xcep_model.predict(face_input, verbose=0)[0][0])
             
-        # Optional Grad-CAM
+        # Grad-CAM heatmap
         heatmap_overlay = None
-        if enable_gradcam and active_model is not None:
-            raw_heatmap = generate_gradcam_heatmap(active_model, face_normalized)
+        if enable_gradcam and grad_model is not None:
+            raw_heatmap = generate_gradcam_heatmap(grad_model, face_normalized)
             if raw_heatmap is not None:
                 heatmap_overlay = overlay_heatmap(face_resized, raw_heatmap)
                 
@@ -234,6 +234,7 @@ def analyze_video_frames(video_path, num_frames=10, threshold=0.50, enable_gradc
     cap.release()
     return {
         "results": results,
+        "sampled_requested": num_frames,
         "total_video_frames": total_frames,
         "fps": fps,
         "duration": duration_sec
@@ -279,15 +280,6 @@ with st.sidebar:
                                help="Highlights spatial regions (seams, eyes, mouth) driving the fake classification.")
     show_masking = st.toggle("Show Background Masking", value=True,
                              help="Displays elliptical background suppression on detected faces.")
-    
-    st.markdown("---")
-    with st.expander("ℹ️ About the Project"):
-        st.markdown("""
-        **FaceForensics++ Deepfake Forensics**
-        * Deep learning verification using spatial attention networks.
-        * Analyzes blending seams, facial warping, and boundary artifacts.
-        * Validated on FaceForensics++ (95.33% accuracy) & Celeb-DF v2.
-        """)
 
 # ---------------------------------------------------------
 # Main UI Header
@@ -296,45 +288,65 @@ st.markdown('<div class="main-header">Deepfake Forensics & Verification Dashboar
 st.markdown('<div class="sub-header">Automated multi-frame facial manipulation analysis with explainable Grad-CAM heatmaps.</div>', unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# Video Source Selection
+# Video Source Selection (Radio Button to prevent tab overlap)
 # ---------------------------------------------------------
-input_tab1, input_tab2 = st.tabs(["📁 Upload Video File", "🎬 Use Sample Video"])
+st.markdown("### 1. Select Video Input")
+source_mode = st.radio(
+    "Choose Video Source:",
+    ["📁 Upload Video File", "🎬 Use Preloaded Sample Video"],
+    horizontal=True
+)
+
 selected_video_path = None
-uploaded_temp_file = None
+video_display_name = ""
 
-with input_tab1:
-    uploaded_file = st.file_uploader("Upload video to examine (.mp4, .avi, .mov)", type=["mp4", "avi", "mov"])
+if source_mode == "📁 Upload Video File":
+    uploaded_file = st.file_uploader(
+        "Upload a video file to examine (.mp4, .avi, .mov)",
+        type=["mp4", "avi", "mov"],
+        key="unique_video_uploader"
+    )
     if uploaded_file is not None:
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tfile.write(uploaded_file.read())
-        selected_video_path = tfile.name
-        uploaded_temp_file = tfile.name
+        temp_dir = tempfile.gettempdir()
+        safe_name = "".join(c for c in uploaded_file.name if c.isalnum() or c in "._-")
+        temp_path = os.path.join(temp_dir, f"df_eval_{safe_name}")
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        selected_video_path = temp_path
+        video_display_name = uploaded_file.name
         st.video(selected_video_path, format="video/mp4")
+        st.success(f"✅ Video Loaded: **{uploaded_file.name}** ({uploaded_file.size / (1024*1024):.2f} MB)")
+    else:
+        st.info("👆 Please upload a video file to begin analysis.")
 
-with input_tab2:
+else:
     sample_files = {
-        "Sample 1: Manipulated Video (FaceForensics++ Deepfake)": os.path.join(BASE_DIR, "gradcam_fake_output.mp4"),
+        "Sample 1: Manipulated Deepfake (FaceForensics++ Fake)": os.path.join(BASE_DIR, "gradcam_fake_output.mp4"),
         "Sample 2: Clean Authentic Video (Genuine Real Footage)": os.path.join(BASE_DIR, "sample_authentic_real.mp4"),
         "Sample 3: Heatmap Overlay Demonstration (Grad-CAM output)": os.path.join(BASE_DIR, "gradcam_real_output.mp4")
     }
-    
     available_samples = {k: v for k, v in sample_files.items() if os.path.exists(v)}
     if available_samples:
-        chosen_sample_name = st.selectbox("Choose a preloaded sample video:", list(available_samples.keys()))
+        chosen_sample_name = st.selectbox(
+            "Choose a preloaded sample video:",
+            list(available_samples.keys()),
+            key="unique_sample_selector"
+        )
         selected_video_path = available_samples[chosen_sample_name]
+        video_display_name = chosen_sample_name
         st.video(selected_video_path, format="video/mp4")
         if "Heatmap Overlay" in chosen_sample_name:
-            st.caption("ℹ️ Note: This sample already has a colored Grad-CAM heatmap baked into the video frames from earlier experiments.")
+            st.caption("ℹ️ Note: This demo video has a colored Grad-CAM heatmap already painted onto the frames.")
     else:
         st.info("No sample videos found in repository root.")
 
 # ---------------------------------------------------------
-# Forensics Execution Button
+# Forensics Execution Button & Analysis Pipeline
 # ---------------------------------------------------------
 if selected_video_path is not None:
     st.markdown("<br>", unsafe_allow_html=True)
     start_analysis = st.button("🔍 Run Deepfake Forensics Now", type="primary", use_container_width=True)
-        
+    
     if start_analysis:
         prog_bar = st.progress(0)
         status_box = st.empty()
@@ -394,7 +406,7 @@ if selected_video_path is not None:
             with m3:
                 st.metric("Avg Fake Probability", f"{avg_prob * 100:.1f}%")
             with m4:
-                st.metric("Faces Extracted", f"{len(results)}/{num_samples}")
+                st.metric("Faces Extracted", f"{len(results)}/{forensic_data['sampled_requested']}")
             with m5:
                 st.metric("Video Duration", f"{forensic_data['duration']:.1f}s")
                 
@@ -467,11 +479,3 @@ if selected_video_path is not None:
                 mime="text/csv",
                 use_container_width=True
             )
-
-# Clean up temp file on unmount/reload if needed
-if uploaded_temp_file and os.path.exists(uploaded_temp_file):
-    try:
-        # Don't delete immediately while session is active; Python tempfile will handle OS cleanup
-        pass
-    except Exception:
-        pass
