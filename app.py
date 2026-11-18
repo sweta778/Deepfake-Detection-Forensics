@@ -309,7 +309,7 @@ with input_tab1:
         tfile.write(uploaded_file.read())
         selected_video_path = tfile.name
         uploaded_temp_file = tfile.name
-        st.video(selected_video_path)
+        st.video(selected_video_path, format="video/mp4")
 
 with input_tab2:
     sample_files = {
@@ -321,7 +321,7 @@ with input_tab2:
     if available_samples:
         chosen_sample_name = st.selectbox("Choose a preloaded sample video:", list(available_samples.keys()))
         selected_video_path = available_samples[chosen_sample_name]
-        st.video(selected_video_path)
+        st.video(selected_video_path, format="video/mp4")
     else:
         st.info("No sample videos found in repository root.")
 
@@ -329,10 +329,8 @@ with input_tab2:
 # Forensics Execution Button
 # ---------------------------------------------------------
 if selected_video_path is not None:
-    st.markdown("---")
-    col_btn, _ = st.columns([1, 3])
-    with col_btn:
-        start_analysis = st.button("🔍 Run Deepfake Forensics", type="primary", use_container_width=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    start_analysis = st.button("🔍 Run Deepfake Forensics Now", type="primary", use_container_width=True)
         
     if start_analysis:
         prog_bar = st.progress(0)
