@@ -1,0 +1,16 @@
+extracted_faces/
+manipulated_sequences/
+original_sequences/
+xception_model.h5
+svm_model.pkl
+shape_predictor_68_face_landmarks.dat
+models/shape_predictor_68_face_landmarks.dat
+*.dat
+*.bz2
+debug_frame.jpg
+*__pycache__*
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.streamlit/secrets.toml
