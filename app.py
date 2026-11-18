@@ -313,8 +313,9 @@ with input_tab1:
 
 with input_tab2:
     sample_files = {
-        "Sample 1: Manipulated Video (FaceForensics++ Fake)": os.path.join(BASE_DIR, "gradcam_fake_output.mp4"),
-        "Sample 2: Authentic Video (FaceForensics++ Real)": os.path.join(BASE_DIR, "gradcam_real_output.mp4")
+        "Sample 1: Manipulated Video (FaceForensics++ Deepfake)": os.path.join(BASE_DIR, "gradcam_fake_output.mp4"),
+        "Sample 2: Clean Authentic Video (Genuine Real Footage)": os.path.join(BASE_DIR, "sample_authentic_real.mp4"),
+        "Sample 3: Heatmap Overlay Demonstration (Grad-CAM output)": os.path.join(BASE_DIR, "gradcam_real_output.mp4")
     }
     
     available_samples = {k: v for k, v in sample_files.items() if os.path.exists(v)}
@@ -322,6 +323,8 @@ with input_tab2:
         chosen_sample_name = st.selectbox("Choose a preloaded sample video:", list(available_samples.keys()))
         selected_video_path = available_samples[chosen_sample_name]
         st.video(selected_video_path, format="video/mp4")
+        if "Heatmap Overlay" in chosen_sample_name:
+            st.caption("ℹ️ Note: This sample already has a colored Grad-CAM heatmap baked into the video frames from earlier experiments.")
     else:
         st.info("No sample videos found in repository root.")
 
